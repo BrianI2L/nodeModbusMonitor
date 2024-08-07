@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Modbus Data</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            padding: 20px;
+            margin: 0;
+            box-sizing: border-box;
+        }
+        .container {
+            display: flex;
+            flex-direction: column;
+            gap: 20px; /* 그래프와 테이블 사이의 기본 간격 */
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        table, th, td {
+            border: 1px solid black;
+        }
+        th, td {
+            padding: 8px;
+            text-align: center;
+        }
+        .pagination {
+            margin: 10px 0;
+            text-align: center;
+        }
+        .pagination button {
+            margin: 0 5px;
+            padding: 5px 10px;
+        }
+        #chart-container {
+            width: 100%;
+            height: 400px;
+            max-width: 100%; /* 그래프 컨테이너의 최대 폭을 100%로 설정 */
+        }
+        canvas {
+            width: 100% !important; /* 그래프 폭을 100%로 설정 */
+            height: auto !important; /* 그래프 높이를 자동으로 설정 */
+        }
+        @media (max-width: 768px) {
+            #chart-container {
+                height: 300px; /* 작은 화면에서는 그래프 높이를 줄임 */
+            }
+        }
+    </style>
+</head>
+<body>
+    <h1>Modbus Data</h1>
+
+    <div>
+        <label for="start-date-input">Start Date (YYYY-MM-DD): </label>
+        <input type="date" id="start-date-input">
+        <label for="end-date-input">End Date (YYYY-MM-DD): </label>
+        <input type="date" id="end-date-input">
+        <button onclick="searchByDateRange()">Search</button>
+    </div>
+
+    <div class="container">
+        <!-- 선 그래프 -->
+        <div id="chart-container">
+            <canvas id="data-chart"></canvas>
+        </div>
+
+        <!-- 데이터 테이블 -->
+        <div id="data-container">
+            <table id="data-table">
+                <thead>
+                    <tr>
+                        <th>Index</th>
+                        <th>Value</th>
+                        <th>Unique Value</th>
+                    </tr>
+                </thead>
+                <tbody id="data-body">
+                    <!-- 데이터가 여기에 표시됩니다 -->
+                </tbody>
+            </table>
+            
+            <!-- 페이지네이션 -->
+            <div class="pagination">
+                <button id="prev-btn" onclick="changePage(-1)">Previous</button>
+                <span id="page-info">Page 1</span>
+                <button id="next-btn" onclick="changePage(1)">Next</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Chart.js 라이브러리 -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <script>
+        const tableBody = document.getElementById('data-body');
+        const pageInfo = document.getElementById('page-info');
+        const ctx = document.getElementById('data-chart').getContext('2d');
+        const startDateInput = document.getElementById('start-date-input');
+        const endDateInput = document.getElementById('end-date-input');
+        let currentPage = 1;
+        const itemsPerPage = 10;
+        const maxItemsForChart = 20;
+        let totalItems = 0;
+        let chart = null;
+        let chartData = []; // 그래프 데이터 저장용 배열
+        let allData = []; // 전체 데이터를 저장하기 위한 배열
+
+        async function fetchData() {
+            try {
+                const response = await fetch('/data');
+                const data = await response.json();
+                
+                totalItems = data.count || 0;
+                allData = data.data ? data.data.slice().reverse() : [];
+
+                const totalPages = Math.ceil(totalItems / itemsPerPage);
+                const start = (currentPage - 1) * itemsPerPage;
+                const end = start + itemsPerPage;
+                const paginatedData = allData.slice(start, end);
+
+                // 그래프 데이터 업데이트
+                updateChartData(allData);
+
+                // 데이터 테이블 업데이트
+                updateTable(paginatedData);
+
+                // 페이지네이션 컨트롤 업데이트
+                updatePaginationControls(totalPages);
+            } catch (err) {
+                console.error('Error fetching data:', err);
+                tableBody.innerHTML = '<tr><td colspan="3">Error fetching data. Please try again later.</td></tr>';
+            }
+        }
+
+        function updateTable(paginatedData) {
+            tableBody.innerHTML = '';
+            paginatedData.forEach((item, index) => {
+                const row = document.createElement('tr');
+                const indexCell = document.createElement('td');
+                const valueCell = document.createElement('td');
+                const uniqueValueCell = document.createElement('td');
+
+                indexCell.textContent = (currentPage - 1) * itemsPerPage + index + 1; // 페이지를 고려한 인덱스
+                valueCell.textContent = item;
+
+                // 고유값 생성 (value와 현재 날짜/시간을 조합)
+                const now = new Date();
+                const uniqueValue = `${item}-${now.toISOString()}`;
+                uniqueValueCell.textContent = uniqueValue;
+
+                row.appendChild(indexCell);
+                row.appendChild(valueCell);
+                row.appendChild(uniqueValueCell);
+                tableBody.appendChild(row);
+            });
+        }
+
+        function updateChartData(newData) {
+            // 최신 20개의 데이터만 유지
+            if (newData.length > maxItemsForChart) {
+                chartData = newData.slice(0, maxItemsForChart);
+            } else {
+                chartData = newData;
+            }
+
+            // 데이터와 레이블 업데이트
+            const labels = chartData.map((_, index) => index + 1);
+
+            if (chart) {
+                // 그래프 데이터 업데이트
+                chart.data.labels = labels;
+                chart.data.datasets[0].data = chartData;
+                chart.update();
+            } else {
+                // 차트가 없으면 새로 생성
+                chart = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: labels,
+                        datasets: [{
+                            label: 'Values',
+                            data: chartData,
+                            borderColor: 'rgba(75, 192, 192, 1)',
+                            backgroundColor: 'rgba(75, 192, 192, 0.2)',
+                            fill: true
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        plugins: {
+                            tooltip: {
+                                callbacks: {
+                                    label: function(context) {
+                                        const value = context.raw;
+                                        return `Value: ${value}`;
+                                    }
+                                }
+                            },
+                            datalabels: {
+                                color: 'black',
+                                display: true,
+                                align: 'top',
+                                anchor: 'end',
+                                formatter: function(value) {
+                                    return value;
+                                }
+                            }
+                        },
+                        scales: {
+                            x: {
+                                title: {
+                                    display: true,
+                                    text: 'Index'
+                                }
+                            },
+                            y: {
+                                title: {
+                                    display: true,
+                                    text: 'Value'
+                                }
+                            }
+                        }
+                    }
+                });
+            }
+        }
+
+        function searchByDateRange() {
+            const startDate = startDateInput.value;
+            const endDate = endDateInput.value;
+
+            if (!startDate || !endDate) {
+                alert('Please enter both start and end dates.');
+                return;
+            }
+
+            const filteredData = allData.filter(item => {
+                const itemDate = new Date(item.timestamp); // assuming 'timestamp' field exists
+                return itemDate >= new Date(startDate) && itemDate <= new Date(endDate);
+            });
+
+            // 페이지를 초기화하고 필터링된 데이터로 테이블과 그래프 업데이트
+            currentPage = 1;
+            updateTable(filteredData.slice(0, itemsPerPage));
+            updateChartData(filteredData.slice(0, maxItemsForChart));
+            updatePaginationControls(1); // 페이지네이션을 1 페이지로 설정
+
+            // 검색 완료 후 데이터 생성 종료
+            document.querySelector('button[onclick="fetchData()"]').disabled = true;
+            document.querySelector('#prev-btn').disabled = true;
+            document.querySelector('#next-btn').disabled = true;
+        }
+
+        function updatePaginationControls(totalPages) {
+            document.getElementById('prev-btn').disabled = currentPage === 1;
+            document.getElementById('next-btn').disabled = currentPage >= totalPages;
+            pageInfo.textContent = `Page ${currentPage} of ${totalPages}`;
+        }
+
+        function changePage(direction) {
+            const totalPages = Math.ceil(totalItems / itemsPerPage);
+            const newPage = currentPage + direction;
+            if (newPage > 0 && newPage <= totalPages) {
+                currentPage = newPage;
+                fetchData();
+            }
+        }
+
+        // 데이터 초기 로드
+        fetchData();
+
+        // 5초 간격으로 데이터 갱신
+        setInterval(fetchData, 5000); // 5000ms = 5초
+    </script>
+</body>
+</html>
